@@ -12,7 +12,8 @@ interface TelemetryMetrics {
   previewOpens: number;
   gameCompletes: number;
   catalogDropOff: number;
-  avgDwellSec: number;
+  totalPlayTimeSec: number;
+  avgPlayTimeSec: number;
 }
 
 const DEFAULT_METRICS: TelemetryMetrics = {
@@ -25,23 +26,24 @@ const DEFAULT_METRICS: TelemetryMetrics = {
   previewOpens: 0,
   gameCompletes: 0,
   catalogDropOff: 0,
-  avgDwellSec: 0,
+  totalPlayTimeSec: 0,
+  avgPlayTimeSec: 0,
 };
 
 export default function CommandStudioPage() {
   const [metrics, setMetrics] = useState<TelemetryMetrics>(DEFAULT_METRICS);
   const [gamesList, setGamesList] = useState<string[]>([]);
-  const [rankings, setRankings] = useState<any[]>([]);
+  const [topLinks, setTopLinks] = useState<any[]>([]);
+  const [mostPlayed, setMostPlayed] = useState<any[]>([]);
+  const [mostDwell, setMostDwell] = useState<any[]>([]);
   const [geoData, setGeoData] = useState<any[]>([]);
   const [acquisitionData, setAcquisitionData] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Tab & Theme State
   const [activeTab, setActiveTab] = useState<string>("Overview");
   const [theme, setTheme] = useState<string>("Cyber");
 
-  // Filter State
   const [preset, setPreset] = useState<string>("30D");
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
@@ -83,7 +85,9 @@ export default function CommandStudioPage() {
       if (json.games && json.games.length > 0) {
         setGamesList(json.games);
       }
-      setRankings(json.rankings || []);
+      setTopLinks(json.topLinks || []);
+      setMostPlayed(json.rankings?.mostPlayed || []);
+      setMostDwell(json.rankings?.mostDwell || []);
       setGeoData(json.geo || []);
       setAcquisitionData(json.acquisition || []);
     } catch (err: any) {
@@ -121,10 +125,14 @@ export default function CommandStudioPage() {
     return (metrics.gameStarts / metrics.sessions) * 100;
   }, [metrics.gameStarts, metrics.sessions]);
 
-  const engagementRate = useMemo(() => {
-    if (!metrics.sessions || metrics.sessions === 0) return 0;
-    return Math.min(100, (metrics.gameStarts / metrics.sessions) * 100);
-  }, [metrics.gameStarts, metrics.sessions]);
+  const formatSec = (sec: number) => {
+    if (sec >= 60) {
+      const m = Math.floor(sec / 60);
+      const s = Math.round(sec % 60);
+      return `${m}m ${s}s`;
+    }
+    return `${sec.toFixed(1)}s`;
+  };
 
   return (
     <div className="min-h-screen bg-[#070b14] text-slate-100 p-6 space-y-6 font-sans">
@@ -147,7 +155,7 @@ export default function CommandStudioPage() {
           </div>
         </div>
 
-        {/* View Switching Tabs */}
+        {/* Tab Switcher */}
         <div className="flex items-center gap-1 bg-slate-900/90 border border-slate-800 p-1 rounded-xl text-xs">
           {["Overview", "Journey & Dwell", "Games & Rankings", "Acquisition", "Cities & Geo"].map((tab) => (
             <button
@@ -164,7 +172,7 @@ export default function CommandStudioPage() {
           ))}
         </div>
 
-        {/* Theme Switchers */}
+        {/* Themes */}
         <div className="flex items-center gap-1 bg-slate-900/80 border border-slate-800 p-1 rounded-lg text-[11px]">
           {["Cyber", "Slate", "Nordic", "OLED", "Light"].map((th) => (
             <button
@@ -180,7 +188,7 @@ export default function CommandStudioPage() {
         </div>
       </nav>
 
-      {/* Slicers & Dynamic Game Dropdown */}
+      {/* Slicers */}
       <section className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
@@ -210,13 +218,13 @@ export default function CommandStudioPage() {
             ))}
           </div>
 
-          {/* Dynamic Games Dropdown populated from BigQuery */}
+          {/* Slicer: All Verified Games Played */}
           <select
             value={game}
             onChange={(e) => setGame(e.target.value)}
             className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none cursor-pointer"
           >
-            <option value="all">All Games (Platform)</option>
+            <option value="all">All Games ({gamesList.length} verified)</option>
             {gamesList.map((g) => (
               <option key={g} value={g}>
                 {g}
@@ -241,7 +249,7 @@ export default function CommandStudioPage() {
             className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none cursor-pointer"
           >
             <option value="all">All Platforms / Sources</option>
-            <option value="direct">Direct</option>
+            <option value="(direct)">Direct</option>
             <option value="google">Google</option>
           </select>
         </div>
@@ -260,7 +268,7 @@ export default function CommandStudioPage() {
         </div>
       )}
 
-      {/* 8 Primary KPI Cards */}
+      {/* 8 Primary Cards */}
       <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
         {[
           { label: "REALTIME (30M)", val: metrics.dau > 0 ? "1" : "0", sub: "Active right now" },
@@ -287,7 +295,7 @@ export default function CommandStudioPage() {
         ))}
       </section>
 
-      {/* Dynamic Tab Body */}
+      {/* 1. Overview Tab */}
       {activeTab === "Overview" && (
         <>
           <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -297,7 +305,7 @@ export default function CommandStudioPage() {
                   <h3 className="text-sm font-semibold text-white">Usage Telemetry Trend</h3>
                   <p className="text-xs text-slate-400">Daily active users, sessions and gameplay starts</p>
                 </div>
-                <span className="text-xs text-indigo-400 font-mono">Live Telemetry Mode</span>
+                <span className="text-xs text-indigo-400 font-mono">Live BigQuery Stream</span>
               </div>
 
               <div className="h-56 w-full flex items-end gap-3 pt-6 border-b border-slate-800">
@@ -349,19 +357,14 @@ export default function CommandStudioPage() {
                     desc: "Active gamer return habit (Benchmark >20%)",
                   },
                   {
-                    title: "Engagement Rate",
-                    val: `${engagementRate.toFixed(1)}%`,
-                    desc: "Sessions activating gameplay",
-                  },
-                  {
-                    title: "Landing → Gameplay",
-                    val: `${conversion.toFixed(1)}%`,
-                    desc: "Direct conversion from entrance to play",
-                  },
-                  {
                     title: "Avg Session Dwell",
-                    val: `${metrics.avgDwellSec.toFixed(1)}s`,
-                    desc: "Total active session duration in seconds",
+                    val: formatSec(metrics.avgPlayTimeSec),
+                    desc: "Average time spent per game session",
+                  },
+                  {
+                    title: "Total Play Dwell",
+                    val: formatSec(metrics.totalPlayTimeSec),
+                    desc: "Cumulative engagement duration in scope",
                   },
                   {
                     title: "Catalog Drop-Off",
@@ -381,19 +384,17 @@ export default function CommandStudioPage() {
             </div>
           </section>
 
+          {/* Benchmarks Table */}
           <section className="bg-slate-900/40 border border-slate-800/70 rounded-2xl p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-white">Industry Benchmarks vs. Platform Health Targets</h3>
-            <p className="text-xs text-slate-400">Where Play-Ezygamers currently stands against peer casual web arcade standards</p>
-
+            <h3 className="text-sm font-semibold text-white">Industry Benchmarks vs. Platform Targets</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px]">
-                    <th className="py-2.5">Core Performance Metric</th>
+                    <th className="py-2.5">Metric</th>
                     <th className="py-2.5">Current Scope</th>
-                    <th className="py-2.5">Peer Benchmark</th>
-                    <th className="py-2.5">Target Goal</th>
-                    <th className="py-2.5">Evaluation Diagnosis</th>
+                    <th className="py-2.5">Benchmark</th>
+                    <th className="py-2.5">Diagnosis</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 text-slate-200">
@@ -401,28 +402,13 @@ export default function CommandStudioPage() {
                     <td className="py-2.5 font-medium">Platform Stickiness (DAU/MAU)</td>
                     <td className="py-2.5 font-bold text-indigo-400">{stickiness.toFixed(1)}%</td>
                     <td className="py-2.5 text-slate-400">20.0%</td>
-                    <td className="py-2.5 text-emerald-400">35.0%</td>
-                    <td className="py-2.5 text-amber-400">
-                      {stickiness >= 20 ? "Healthy retention baseline" : "Below retention baseline"}
-                    </td>
+                    <td className="py-2.5 text-emerald-400">{stickiness >= 20 ? "Healthy" : "Below Baseline"}</td>
                   </tr>
                   <tr>
                     <td className="py-2.5 font-medium">Landing → Gameplay Conversion</td>
                     <td className="py-2.5 font-bold text-indigo-400">{conversion.toFixed(1)}%</td>
                     <td className="py-2.5 text-slate-400">22.0%</td>
-                    <td className="py-2.5 text-emerald-400">35.0%</td>
-                    <td className="py-2.5 text-emerald-400">
-                      {conversion >= 22 ? "Optimal catalog engagement" : "Catalog friction observed"}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 font-medium">Catalog Drop-Off Rate</td>
-                    <td className="py-2.5 font-bold text-indigo-400">{metrics.catalogDropOff.toFixed(1)}%</td>
-                    <td className="py-2.5 text-slate-400">&lt; 30.0%</td>
-                    <td className="py-2.5 text-emerald-400">&lt; 15.0%</td>
-                    <td className="py-2.5 text-rose-400">
-                      {metrics.catalogDropOff > 50 ? "High bounce before modal preview" : "Healthy exploration"}
-                    </td>
+                    <td className="py-2.5 text-emerald-400">{conversion >= 22 ? "Optimal" : "Catalog Friction"}</td>
                   </tr>
                 </tbody>
               </table>
@@ -431,115 +417,173 @@ export default function CommandStudioPage() {
         </>
       )}
 
-      {/* Tab: Journey & Dwell */}
+      {/* 2. Journey & Dwell Tab */}
       {activeTab === "Journey & Dwell" && (
-        <section className="bg-slate-900/40 border border-slate-800/70 rounded-2xl p-6 space-y-4">
-          <h3 className="text-base font-semibold text-white">Full User Journey & Dwell Progression</h3>
-          <p className="text-xs text-slate-400">Progression from Landing Page View to Complete Game Play</p>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4">
-            {[
-              { step: "1. Page View (Catalog)", count: metrics.catalogViews || metrics.sessions },
-              { step: "2. Preview Opens", count: metrics.previewOpens },
-              { step: "3. Game Starts", count: metrics.gameStarts },
-              { step: "4. Game Completes", count: metrics.gameCompletes },
-            ].map((st, i) => (
-              <div key={i} className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 text-center">
-                <span className="text-[11px] text-slate-400 font-semibold">{st.step}</span>
-                <div className="text-2xl font-bold text-white mt-2">{st.count.toLocaleString()}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 mt-4">
-            <h4 className="text-xs font-semibold text-slate-200">Average Session Dwell Time</h4>
-            <div className="text-3xl font-extrabold text-indigo-400 mt-2">
-              {metrics.avgDwellSec.toFixed(1)} seconds
+        <section className="bg-slate-900/40 border border-slate-800/70 rounded-2xl p-6 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-white">User Journey, Play Durations & Session Flow</h3>
+              <p className="text-xs text-slate-400">Detailed progression, time spent in games, and top opening entry links</p>
             </div>
-            <p className="text-xs text-slate-500 mt-1">Calculated directly from BigQuery GA4 event dwell telemetry.</p>
+            <div className="flex gap-4 text-xs font-mono">
+              <span className="text-indigo-400">Total Play Time: <b>{formatSec(metrics.totalPlayTimeSec)}</b></span>
+              <span className="text-emerald-400">Avg Play Time: <b>{formatSec(metrics.avgPlayTimeSec)}</b></span>
+            </div>
           </div>
-        </section>
-      )}
 
-      {/* Tab: Games & Rankings */}
-      {activeTab === "Games & Rankings" && (
-        <section className="bg-slate-900/40 border border-slate-800/70 rounded-2xl p-6 space-y-4">
-          <h3 className="text-base font-semibold text-white">Games Performance & Play Frequency</h3>
-          <p className="text-xs text-slate-400">Total gameplay executions ranked by popularity in selected scope</p>
+          {/* Dwell Summary Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+              <span className="text-[11px] text-slate-400">Total Play Time</span>
+              <div className="text-2xl font-bold text-white mt-1">{formatSec(metrics.totalPlayTimeSec)}</div>
+              <span className="text-[10px] text-slate-500">Cumulative gameplay dwell</span>
+            </div>
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+              <span className="text-[11px] text-slate-400">Average Play Duration</span>
+              <div className="text-2xl font-bold text-indigo-400 mt-1">{formatSec(metrics.avgPlayTimeSec)}</div>
+              <span className="text-[10px] text-slate-500">Per game session activated</span>
+            </div>
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+              <span className="text-[11px] text-slate-400">Total Sessions</span>
+              <div className="text-2xl font-bold text-emerald-400 mt-1">{metrics.sessions.toLocaleString()}</div>
+              <span className="text-[10px] text-slate-500">Unique GA sessions</span>
+            </div>
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+              <span className="text-[11px] text-slate-400">Catalog Drop-Off</span>
+              <div className="text-2xl font-bold text-rose-400 mt-1">{metrics.catalogDropOff.toFixed(1)}%</div>
+              <span className="text-[10px] text-slate-500">Exited before playing</span>
+            </div>
+          </div>
 
-          <div className="overflow-x-auto pt-2">
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px]">
-                  <th className="py-2.5">Game Title</th>
-                  <th className="py-2.5">Total Plays</th>
-                  <th className="py-2.5">Unique Players</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                {rankings.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="py-4 text-center text-slate-500">
-                      No game events found in this date window.
-                    </td>
+          {/* Top Opening Games & URLs */}
+          <div className="space-y-3 pt-2">
+            <h4 className="text-xs font-semibold text-slate-200 uppercase tracking-wider">Top Opening Games & Entry URLs</h4>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px]">
+                    <th className="py-2.5">Game / Content Title</th>
+                    <th className="py-2.5">Opening Page Link</th>
+                    <th className="py-2.5">Total Opens</th>
+                    <th className="py-2.5">Unique Visitors</th>
                   </tr>
-                ) : (
-                  rankings.map((r, i) => (
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 text-slate-200">
+                  {topLinks.map((l, i) => (
                     <tr key={i}>
-                      <td className="py-2.5 font-bold text-indigo-400">{r.game_title}</td>
-                      <td className="py-2.5">{r.plays}</td>
-                      <td className="py-2.5">{r.unique_players}</td>
+                      <td className="py-2.5 font-bold text-indigo-400">{l.game_title}</td>
+                      <td className="py-2.5 font-mono text-slate-400 max-w-xs truncate">{l.url}</td>
+                      <td className="py-2.5 font-bold text-white">{l.opens}</td>
+                      <td className="py-2.5 text-slate-400">{l.unique_visitors}</td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
       )}
 
-      {/* Tab: Acquisition */}
+      {/* 3. Games & Rankings Tab (Side-by-Side) */}
+      {activeTab === "Games & Rankings" && (
+        <section className="bg-slate-900/40 border border-slate-800/70 rounded-2xl p-6 space-y-6">
+          <div>
+            <h3 className="text-base font-semibold text-white">Dual Games Intelligence & Performance Rankings</h3>
+            <p className="text-xs text-slate-400">Side-by-side comparison: High-frequency volume vs. Deep engagement dwell time</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Left: Top Played */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3">
+              <h4 className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                <span>🔥</span> Most Played Games (Volume)
+              </h4>
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-500 uppercase text-[10px]">
+                    <th className="py-2">Game Title</th>
+                    <th className="py-2">Total Plays</th>
+                    <th className="py-2">Unique Players</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                  {mostPlayed.map((g, i) => (
+                    <tr key={i}>
+                      <td className="py-2 font-medium text-white">{g.game_title}</td>
+                      <td className="py-2 font-bold text-indigo-400">{g.total_plays}</td>
+                      <td className="py-2 text-slate-400">{g.unique_players}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Right: Most Played by Average Dwell Time */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3">
+              <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                <span>⏱️</span> Highest Average Play Dwell (Seconds)
+              </h4>
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-500 uppercase text-[10px]">
+                    <th className="py-2">Game Title</th>
+                    <th className="py-2">Avg Dwell</th>
+                    <th className="py-2">Total Plays</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                  {mostDwell.map((g, i) => (
+                    <tr key={i}>
+                      <td className="py-2 font-medium text-white">{g.game_title}</td>
+                      <td className="py-2 font-bold text-emerald-400">{g.avg_dwell_sec}s</td>
+                      <td className="py-2 text-slate-400">{g.total_plays}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* 4. Acquisition Tab */}
       {activeTab === "Acquisition" && (
         <section className="bg-slate-900/40 border border-slate-800/70 rounded-2xl p-6 space-y-4">
-          <h3 className="text-base font-semibold text-white">Acquisition Channels & Traffic Sources</h3>
-          <p className="text-xs text-slate-400">Source attribution for active gaming sessions</p>
+          <h3 className="text-base font-semibold text-white">Full Acquisition Attribution & Inbound Sources</h3>
+          <p className="text-xs text-slate-400">Real attribution from all referral engines, campaigns, and direct traffic channels</p>
 
           <div className="overflow-x-auto pt-2">
             <table className="w-full text-xs text-left">
               <thead>
                 <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px]">
-                  <th className="py-2.5">Traffic Source</th>
+                  <th className="py-2.5">Source Channel</th>
+                  <th className="py-2.5">Medium</th>
                   <th className="py-2.5">Active Users</th>
                   <th className="py-2.5">Sessions</th>
+                  <th className="py-2.5">Gameplay Starts</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                {acquisitionData.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="py-4 text-center text-slate-500">
-                      No acquisition source data found in this scope.
-                    </td>
+                {acquisitionData.map((s, i) => (
+                  <tr key={i}>
+                    <td className="py-2.5 font-bold text-emerald-400">{s.source}</td>
+                    <td className="py-2.5 text-slate-400">{s.medium}</td>
+                    <td className="py-2.5">{s.users}</td>
+                    <td className="py-2.5 font-bold text-white">{s.sessions}</td>
+                    <td className="py-2.5 text-indigo-400">{s.plays}</td>
                   </tr>
-                ) : (
-                  acquisitionData.map((s, i) => (
-                    <tr key={i}>
-                      <td className="py-2.5 font-bold text-emerald-400">{s.source_name}</td>
-                      <td className="py-2.5">{s.users}</td>
-                      <td className="py-2.5">{s.sessions}</td>
-                    </tr>
-                  ))
-                )}
+                ))}
               </tbody>
             </table>
           </div>
         </section>
       )}
 
-      {/* Tab: Cities & Geo */}
+      {/* 5. Cities & Geo Tab */}
       {activeTab === "Cities & Geo" && (
         <section className="bg-slate-900/40 border border-slate-800/70 rounded-2xl p-6 space-y-4">
           <h3 className="text-base font-semibold text-white">Geographic Telemetry Distribution</h3>
-          <p className="text-xs text-slate-400">Active users and gameplay starts across geographical locations</p>
+          <p className="text-xs text-slate-400">Precision city-level and country distribution of all active players and sessions</p>
 
           <div className="overflow-x-auto pt-2">
             <table className="w-full text-xs text-left">
@@ -547,27 +591,21 @@ export default function CommandStudioPage() {
                 <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px]">
                   <th className="py-2.5">City</th>
                   <th className="py-2.5">Country</th>
-                  <th className="py-2.5">Users</th>
-                  <th className="py-2.5">Plays</th>
+                  <th className="py-2.5">Active Gamers</th>
+                  <th className="py-2.5">Sessions</th>
+                  <th className="py-2.5">Game Starts</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                {geoData.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="py-4 text-center text-slate-500">
-                      No geographic data found in this scope.
-                    </td>
+                {geoData.map((g, i) => (
+                  <tr key={i}>
+                    <td className="py-2.5 font-bold text-white">{g.city}</td>
+                    <td className="py-2.5 text-slate-400">{g.country}</td>
+                    <td className="py-2.5 font-bold text-indigo-400">{g.users}</td>
+                    <td className="py-2.5">{g.sessions}</td>
+                    <td className="py-2.5 text-emerald-400">{g.plays}</td>
                   </tr>
-                ) : (
-                  geoData.map((g, i) => (
-                    <tr key={i}>
-                      <td className="py-2.5 font-bold text-white">{g.city}</td>
-                      <td className="py-2.5 text-slate-400">{g.country}</td>
-                      <td className="py-2.5 text-indigo-400">{g.users}</td>
-                      <td className="py-2.5">{g.plays}</td>
-                    </tr>
-                  ))
-                )}
+                ))}
               </tbody>
             </table>
           </div>

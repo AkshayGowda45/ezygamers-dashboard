@@ -62,13 +62,20 @@ export async function GET(request: NextRequest) {
     if (startDate && endDate) {
       const startClean = startDate.replace(/-/g, "");
       const endClean = endDate.replace(/-/g, "");
-      conditions.push("(_TABLE_SUFFIX BETWEEN @startClean AND @endClean OR _TABLE_SUFFIX LIKE 'intraday_%')");
+      conditions.push(
+        "(_TABLE_SUFFIX BETWEEN @startClean AND @endClean OR _TABLE_SUFFIX LIKE 'intraday_%')"
+      );
       queryParams.startClean = startClean;
       queryParams.endClean = endClean;
     }
 
     if (game !== "all") {
-      conditions.push("(SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') = @game");
+      conditions.push(
+        `COALESCE(
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title'),
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'item_name')
+        ) = @game`
+      );
       queryParams.game = game;
     }
     if (device !== "all") {
@@ -76,26 +83,29 @@ export async function GET(request: NextRequest) {
       queryParams.device = device;
     }
     if (source !== "all") {
-      conditions.push("traffic_source.source = @source");
+      conditions.push("COALESCE(traffic_source.source, '(direct)') = @source");
       queryParams.source = source;
     }
 
     const whereClause = conditions.join(" AND ");
 
-    // Single unified SQL execution that calculates KPI totals, rankings, and geo distributions
-    const query = `
-      WITH scoped_events AS (
+    // Query 1: Comprehensive Platform & Journey Metrics
+    const metricsQuery = `
+      WITH raw_scoped AS (
         SELECT
           event_name,
           user_pseudo_id,
           event_date,
-          device.category AS device_category,
-          COALESCE(NULLIF(geo.city, ''), 'Unknown') AS city,
-          COALESCE(NULLIF(geo.country, ''), 'Unknown') AS country,
-          COALESCE(NULLIF(traffic_source.source, ''), '(direct)') AS traffic_source,
-          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') AS game_title,
+          COALESCE(
+            (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title'),
+            (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'item_name')
+          ) AS resolved_game,
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'page_location') AS page_url,
           (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS session_id,
-          (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'engagement_time_msec') AS dwell_time
+          COALESCE(
+            (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'engagement_time_msec'),
+            0
+          ) AS dwell_msec
         FROM ${EVENTS_TABLE}
         WHERE ${whereClause}
       )
@@ -114,22 +124,107 @@ export async function GET(request: NextRequest) {
         COUNT(CASE WHEN event_name = 'page_view' THEN 1 END) AS catalogViews,
         COUNT(CASE WHEN event_name = 'game_select' THEN 1 END) AS previewOpens,
         COUNT(CASE WHEN event_name = 'game_complete' THEN 1 END) AS gameCompletes,
-        COALESCE(AVG(dwell_time) / 1000.0, 0) AS avgDwellSec
-      FROM scoped_events;
+        COALESCE(SUM(dwell_msec) / 1000.0, 0) AS totalPlayTimeSec,
+        COALESCE(SAFE_DIVIDE(SUM(dwell_msec) / 1000.0, COUNT(CASE WHEN event_name = 'game_start' THEN 1 END)), 0) AS avgPlayTimeSec
+      FROM raw_scoped;
     `;
 
-    // Query distinct game titles to populate the dropdown
+    // Query 2: All Distinct Games from raw exports
     const gamesQuery = `
       SELECT DISTINCT 
-        (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') AS game_title
+        COALESCE(
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title'),
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'item_name')
+        ) AS game_title
       FROM ${EVENTS_TABLE}
-      WHERE (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') IS NOT NULL;
+      WHERE COALESCE(
+        (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title'),
+        (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'item_name')
+      ) IS NOT NULL;
     `;
 
-    // Run both queries safely in parallel
-    const [[metricsRows], [gameRows]] = await Promise.all([
-      bigquery.query({ query, params: queryParams }),
+    // Query 3: Top Opening Games & URLs
+    const topLinksQuery = `
+      SELECT
+        COALESCE(
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title'),
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'item_name'),
+          'Portal Homepage'
+        ) AS game_title,
+        COALESCE((SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'page_location'), '/') AS url,
+        COUNT(1) AS opens,
+        COUNT(DISTINCT user_pseudo_id) AS unique_visitors
+      FROM ${EVENTS_TABLE}
+      WHERE ${whereClause}
+      GROUP BY 1, 2
+      ORDER BY opens DESC
+      LIMIT 8;
+    `;
+
+    // Query 4: Dual Rankings (Top Played vs. Highest Dwell Time)
+    const rankingsQuery = `
+      SELECT
+        COALESCE(
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title'),
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'item_name')
+        ) AS game_title,
+        COUNT(CASE WHEN event_name = 'game_start' THEN 1 END) AS total_plays,
+        COUNT(DISTINCT user_pseudo_id) AS unique_players,
+        ROUND(COALESCE(AVG((SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'engagement_time_msec')) / 1000.0, 0), 1) AS avg_dwell_sec
+      FROM ${EVENTS_TABLE}
+      WHERE ${whereClause}
+        AND COALESCE(
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title'),
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'item_name')
+        ) IS NOT NULL
+      GROUP BY 1;
+    `;
+
+    // Query 5: Full Acquisition Breakdown
+    const acquisitionQuery = `
+      SELECT
+        COALESCE(NULLIF(traffic_source.source, ''), '(direct)') AS source,
+        COALESCE(NULLIF(traffic_source.medium, ''), '(none)') AS medium,
+        COUNT(DISTINCT user_pseudo_id) AS users,
+        COUNT(DISTINCT CONCAT(user_pseudo_id, CAST((SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS STRING))) AS sessions,
+        COUNT(CASE WHEN event_name = 'game_start' THEN 1 END) AS plays
+      FROM ${EVENTS_TABLE}
+      WHERE ${whereClause}
+      GROUP BY 1, 2
+      ORDER BY sessions DESC
+      LIMIT 10;
+    `;
+
+    // Query 6: Cities & Geo Precision
+    const geoQuery = `
+      SELECT
+        COALESCE(NULLIF(geo.city, ''), 'Unknown City') AS city,
+        COALESCE(NULLIF(geo.country, ''), 'Unknown Country') AS country,
+        COUNT(DISTINCT user_pseudo_id) AS users,
+        COUNT(DISTINCT CONCAT(user_pseudo_id, CAST((SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS STRING))) AS sessions,
+        COUNT(CASE WHEN event_name = 'game_start' THEN 1 END) AS plays
+      FROM ${EVENTS_TABLE}
+      WHERE ${whereClause}
+      GROUP BY 1, 2
+      ORDER BY users DESC
+      LIMIT 10;
+    `;
+
+    // Execute queries in parallel
+    const [
+      [metricsRows],
+      [gameRows],
+      [linkRows],
+      [rankingsRows],
+      [acqRows],
+      [geoRows],
+    ] = await Promise.all([
+      bigquery.query({ query: metricsQuery, params: queryParams }),
       bigquery.query({ query: gamesQuery }),
+      bigquery.query({ query: topLinksQuery, params: queryParams }),
+      bigquery.query({ query: rankingsQuery, params: queryParams }),
+      bigquery.query({ query: acquisitionQuery, params: queryParams }),
+      bigquery.query({ query: geoQuery, params: queryParams }),
     ]);
 
     const result = metricsRows[0] || {};
@@ -139,6 +234,14 @@ export async function GET(request: NextRequest) {
       catalogViews > 0
         ? Math.max(0, ((catalogViews - previewOpens) / catalogViews) * 100)
         : 0;
+
+    // Split rankings: Most Played vs. Most Dwell
+    const mostPlayed = [...rankingsRows].sort(
+      (a: any, b: any) => Number(b.total_plays || 0) - Number(a.total_plays || 0)
+    );
+    const mostDwell = [...rankingsRows].sort(
+      (a: any, b: any) => Number(b.avg_dwell_sec || 0) - Number(a.avg_dwell_sec || 0)
+    );
 
     const gameList = gameRows
       .map((r: any) => r.game_title)
@@ -156,19 +259,17 @@ export async function GET(request: NextRequest) {
         previewOpens,
         gameCompletes: Number(result.gameCompletes || 0),
         catalogDropOff,
-        avgDwellSec: Number(result.avgDwellSec || 0),
+        totalPlayTimeSec: Number(result.totalPlayTimeSec || 0),
+        avgPlayTimeSec: Number(result.avgPlayTimeSec || 0),
       },
       games: gameList,
-      rankings: [
-        { game_title: "Neon Dash", plays: Number(result.gameStarts || 0), unique_players: Number(result.dau || 0) },
-        { game_title: "Pixel Quest", plays: Math.round(Number(result.gameStarts || 0) * 0.4), unique_players: Math.round(Number(result.dau || 0) * 0.5) },
-      ],
-      geo: [
-        { city: "Bengaluru", country: "India", users: Number(result.dau || 0), plays: Number(result.gameStarts || 0) },
-      ],
-      acquisition: [
-        { source_name: "Direct", users: Number(result.dau || 0), sessions: Number(result.sessions || 0) },
-      ],
+      topLinks: linkRows || [],
+      rankings: {
+        mostPlayed,
+        mostDwell,
+      },
+      acquisition: acqRows || [],
+      geo: geoRows || [],
     });
   } catch (error: any) {
     console.error("Telemetry API Error:", error);
