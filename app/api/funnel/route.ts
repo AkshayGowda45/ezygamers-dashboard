@@ -1,15 +1,3 @@
-const EVENTS_TABLE = "`gen-lang-client-0375476077.analytics_telemetry.events_*`";
-```[cite: 2]
-
-This needs to be updated with the active project and dataset from your BigQuery console (`play-ezygamers-512305.analytics_557900460`):
-
----
-
-### Step 1: Replace Current File (`app/api/funnel/route.ts`)
-1. Press **`Ctrl + A`** to select everything in the file you are currently looking at[cite: 2].
-2. Press **`Ctrl + V`** to paste this complete code:
-
-```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { BigQuery } from "@google-cloud/bigquery";
 
