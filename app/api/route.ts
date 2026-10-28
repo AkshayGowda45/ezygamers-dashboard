@@ -38,7 +38,8 @@ function cleanParam(val: string | null): string {
     val === "all" ||
     val === "All Games" ||
     val === "All Devices" ||
-    val === "All Sources"
+    val === "All Sources" ||
+    val === "All Games (Platform)"
   ) {
     return "all";
   }
@@ -90,7 +91,14 @@ export async function GET(request: NextRequest) {
           event_name,
           user_pseudo_id,
           event_date,
-          (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS session_id
+          TIMESTAMP_MICROS(event_timestamp) as event_time,
+          device.category AS device_category,
+          geo.city AS geo_city,
+          geo.country AS geo_country,
+          traffic_source.source AS traffic_source,
+          (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') AS game_title,
+          (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS session_id,
+          (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'engagement_time_msec') AS dwell_time
         FROM ${EVENTS_TABLE}
         WHERE ${whereClause}
       )
@@ -108,36 +116,92 @@ export async function GET(request: NextRequest) {
         COUNT(CASE WHEN event_name = 'game_start' THEN 1 END) AS gameStarts,
         COUNT(CASE WHEN event_name = 'page_view' THEN 1 END) AS catalogViews,
         COUNT(CASE WHEN event_name = 'game_select' THEN 1 END) AS previewOpens,
-        COUNT(CASE WHEN event_name = 'game_complete' THEN 1 END) AS gameCompletes
+        COUNT(CASE WHEN event_name = 'game_complete' THEN 1 END) AS gameCompletes,
+        COALESCE(AVG(dwell_time) / 1000.0, 0) AS avgDwellSec
       FROM base_events;
+
+      -- Query 2: Dynamic Game Titles
+      SELECT DISTINCT 
+        (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') AS game_title
+      FROM ${EVENTS_TABLE}
+      WHERE (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') IS NOT NULL;
+
+      -- Query 3: Game Rankings
+      SELECT
+        (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') AS game_title,
+        COUNT(CASE WHEN event_name = 'game_start' THEN 1 END) AS plays,
+        COUNT(DISTINCT user_pseudo_id) AS unique_players
+      FROM ${EVENTS_TABLE}
+      WHERE ${whereClause}
+        AND (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') IS NOT NULL
+      GROUP BY 1
+      ORDER BY plays DESC
+      LIMIT 10;
+
+      -- Query 4: Geo Breakdown
+      SELECT
+        COALESCE(NULLIF(geo.city, ''), 'Unknown') AS city,
+        COALESCE(NULLIF(geo.country, ''), 'Unknown') AS country,
+        COUNT(DISTINCT user_pseudo_id) AS users,
+        COUNT(CASE WHEN event_name = 'game_start' THEN 1 END) AS plays
+      FROM ${EVENTS_TABLE}
+      WHERE ${whereClause}
+      GROUP BY 1, 2
+      ORDER BY users DESC
+      LIMIT 10;
+
+      -- Query 5: Acquisition Source Breakdown
+      SELECT
+        COALESCE(NULLIF(traffic_source.source, ''), '(direct)') AS source_name,
+        COUNT(DISTINCT user_pseudo_id) AS users,
+        COUNT(DISTINCT CONCAT(user_pseudo_id, CAST((SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS STRING))) AS sessions
+      FROM ${EVENTS_TABLE}
+      WHERE ${whereClause}
+      GROUP BY 1
+      ORDER BY sessions DESC
+      LIMIT 10;
     `;
 
-    const [rows] = await bigquery.query({
+    const [results] = await bigquery.query({
       query,
       params: queryParams,
     });
 
-    const result = rows[0] || {};
-    const catalogViews = Number(result.catalogViews || 0);
-    const previewOpens = Number(result.previewOpens || 0);
+    const metricsRow = Array.isArray(results[0]) ? results[0][0] : results[0] || {};
+    const gameRows = results[1] || [];
+    const rankingsRows = results[2] || [];
+    const geoRows = results[3] || [];
+    const acquisitionRows = results[4] || [];
+
+    const catalogViews = Number(metricsRow.catalogViews || 0);
+    const previewOpens = Number(metricsRow.previewOpens || 0);
     const catalogDropOff =
       catalogViews > 0
         ? Math.max(0, ((catalogViews - previewOpens) / catalogViews) * 100)
         : 0;
 
+    const gameList = gameRows
+      .map((r: any) => r.game_title)
+      .filter((title: string | null) => Boolean(title));
+
     return NextResponse.json({
       success: true,
       metrics: {
-        dau: Number(result.dau || 0),
-        wau: Number(result.wau || 0),
-        mau: Number(result.mau || 0),
-        sessions: Number(result.sessions || 0),
-        gameStarts: Number(result.gameStarts || 0),
+        dau: Number(metricsRow.dau || 0),
+        wau: Number(metricsRow.wau || 0),
+        mau: Number(metricsRow.mau || 0),
+        sessions: Number(metricsRow.sessions || 0),
+        gameStarts: Number(metricsRow.gameStarts || 0),
         catalogViews,
         previewOpens,
-        gameCompletes: Number(result.gameCompletes || 0),
+        gameCompletes: Number(metricsRow.gameCompletes || 0),
         catalogDropOff,
+        avgDwellSec: Number(metricsRow.avgDwellSec || 0),
       },
+      games: gameList,
+      rankings: rankingsRows,
+      geo: geoRows,
+      acquisition: acquisitionRows,
     });
   } catch (error: any) {
     console.error("Telemetry API Error:", error);
