@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { BigQuery } from "@google-cloud/bigquery";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
 function getBigQueryClient() {
   if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
