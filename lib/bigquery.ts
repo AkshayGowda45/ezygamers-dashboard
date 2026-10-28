@@ -1,6 +1,6 @@
 import { BigQuery } from '@google-cloud/bigquery';
 
-function getBigQueryClient() {
+function createBigQueryClient() {
   if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
     try {
       const credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_KEY);
@@ -11,15 +11,15 @@ function getBigQueryClient() {
           private_key: credentials.private_key,
         },
       });
-    } catch (e) {
-      console.error('Failed to parse GCP_SERVICE_ACCOUNT_KEY:', e);
+    } catch (error) {
+      console.error('Error parsing GCP_SERVICE_ACCOUNT_KEY:', error);
     }
   }
 
-  // Fallback for local development if using ADC or individual env vars
+  // Fallback for local development in VS Code
   return new BigQuery({
-    projectId: process.env.GCP_PROJECT_ID,
+    projectId: process.env.GCP_PROJECT_ID || 'gen-lang-client-0375476077',
   });
 }
 
-export const bigquery = getBigQueryClient();
+export const bigquery = createBigQueryClient();
