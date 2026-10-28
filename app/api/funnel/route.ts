@@ -1,7 +1,17 @@
+const EVENTS_TABLE = "`gen-lang-client-0375476077.analytics_telemetry.events_*`";
+```[cite: 2]
+
+This needs to be updated with the active project and dataset from your BigQuery console (`play-ezygamers-512305.analytics_557900460`):
+
+---
+
+### Step 1: Replace Current File (`app/api/funnel/route.ts`)
+1. Press **`Ctrl + A`** to select everything in the file you are currently looking at[cite: 2].
+2. Press **`Ctrl + V`** to paste this complete code:
+
+```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { BigQuery } from "@google-cloud/bigquery";
-
-
 
 function getBigQueryClient() {
   if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
@@ -15,28 +25,33 @@ function getBigQueryClient() {
         projectId:
           credentials.project_id ||
           process.env.GCP_PROJECT_ID ||
-          "gen-lang-client-0375476077",
+          "play-ezygamers-512305",
         credentials: {
           client_email: credentials.client_email,
           private_key: credentials.private_key?.replace(/\\n/g, "\n"),
         },
       });
     } catch (e) {
-      console.error("Failed to parse GCP_SERVICE_ACCOUNT_KEY:", e);
+      console.error("Failed to parse GCP_SERVICE_ACCOUNT_KEY in funnel/route.ts:", e);
     }
   }
 
   return new BigQuery({
-    projectId: process.env.GCP_PROJECT_ID || "gen-lang-client-0375476077",
+    projectId: process.env.GCP_PROJECT_ID || "play-ezygamers-512305",
   });
 }
 
 const bigquery = getBigQueryClient();
-// Queries all raw GA4 tables (daily batch + intraday streaming) directly in the free tier
-const EVENTS_TABLE = "`gen-lang-client-0375476077.analytics_telemetry.events_*`";
+const EVENTS_TABLE = "`play-ezygamers-512305.analytics_557900460.events_*`";
 
 function cleanParam(val: string | null): string {
-  if (!val || val === "all" || val === "All Games" || val === "All Devices" || val === "All Sources") {
+  if (
+    !val ||
+    val === "all" ||
+    val === "All Games" ||
+    val === "All Devices" ||
+    val === "All Sources"
+  ) {
     return "all";
   }
   return val.replace(/['"]/g, "");
@@ -54,12 +69,11 @@ export async function GET(request: NextRequest) {
     let conditions: string[] = ["1 = 1"];
     const queryParams: Record<string, any> = {};
 
-    // Suffix filtering to keep BigQuery scan costs low and include intraday
     if (startDate && endDate) {
       const startClean = startDate.replace(/-/g, "");
       const endClean = endDate.replace(/-/g, "");
       conditions.push(
-        `(_TABLE_SUFFIX BETWEEN @startClean AND @endClean OR _TABLE_SUFFIX LIKE 'intraday_%')`
+        "(_TABLE_SUFFIX BETWEEN @startClean AND @endClean OR _TABLE_SUFFIX LIKE 'intraday_%')"
       );
       queryParams.startClean = startClean;
       queryParams.endClean = endClean;
@@ -67,47 +81,32 @@ export async function GET(request: NextRequest) {
 
     if (game !== "all") {
       conditions.push(
-        `(SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') = @game`
+        "(SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'game_title') = @game"
       );
       queryParams.game = game;
     }
     if (device !== "all") {
-      conditions.push(`device.category = @device`);
+      conditions.push("device.category = @device");
       queryParams.device = device;
     }
     if (source !== "all") {
-      conditions.push(`traffic_source.source = @source`);
+      conditions.push("traffic_source.source = @source");
       queryParams.source = source;
     }
 
     const whereClause = conditions.join(" AND ");
 
     const query = `
-      WITH base_events AS (
+      WITH funnel_steps AS (
         SELECT
-          event_name,
-          user_pseudo_id,
-          event_date,
-          (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS session_id
+          COUNT(DISTINCT CASE WHEN event_name = 'page_view' THEN user_pseudo_id END) AS catalog_views,
+          COUNT(DISTINCT CASE WHEN event_name = 'game_select' THEN user_pseudo_id END) AS preview_opens,
+          COUNT(DISTINCT CASE WHEN event_name = 'game_start' THEN user_pseudo_id END) AS game_starts,
+          COUNT(DISTINCT CASE WHEN event_name = 'game_complete' THEN user_pseudo_id END) AS game_completes
         FROM ${EVENTS_TABLE}
         WHERE ${whereClause}
       )
-      SELECT
-        COUNT(DISTINCT user_pseudo_id) AS dau,
-        COUNT(DISTINCT CASE 
-          WHEN event_date >= FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE("Asia/Kolkata"), INTERVAL 7 DAY)) 
-          THEN user_pseudo_id END
-        ) AS wau,
-        COUNT(DISTINCT CASE 
-          WHEN event_date >= FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE("Asia/Kolkata"), INTERVAL 30 DAY)) 
-          THEN user_pseudo_id END
-        ) AS mau,
-        COUNT(DISTINCT CONCAT(user_pseudo_id, CAST(session_id AS STRING))) AS sessions,
-        COUNT(CASE WHEN event_name = 'game_start' THEN 1 END) AS gameStarts,
-        COUNT(CASE WHEN event_name = 'page_view' THEN 1 END) AS catalogViews,
-        COUNT(CASE WHEN event_name = 'game_select' THEN 1 END) AS previewOpens,
-        COUNT(CASE WHEN event_name = 'game_complete' THEN 1 END) AS gameCompletes
-      FROM base_events;
+      SELECT * FROM funnel_steps;
     `;
 
     const [rows] = await bigquery.query({
@@ -115,29 +114,17 @@ export async function GET(request: NextRequest) {
       params: queryParams,
     });
 
-    const result = rows[0] || {};
-    const catalogViews = Number(result.catalogViews || 0);
-    const previewOpens = Number(result.previewOpens || 0);
-    const catalogDropOff = catalogViews > 0 
-      ? Math.max(0, ((catalogViews - previewOpens) / catalogViews) * 100) 
-      : 0;
-
     return NextResponse.json({
       success: true,
-      metrics: {
-        dau: Number(result.dau || 0),
-        wau: Number(result.wau || 0),
-        mau: Number(result.mau || 0),
-        sessions: Number(result.sessions || 0),
-        gameStarts: Number(result.gameStarts || 0),
-        catalogViews,
-        previewOpens,
-        gameCompletes: Number(result.gameCompletes || 0),
-        catalogDropOff,
+      data: rows[0] || {
+        catalog_views: 0,
+        preview_opens: 0,
+        game_starts: 0,
+        game_completes: 0,
       },
     });
   } catch (error: any) {
-    console.error("Telemetry API Error:", error);
+    console.error("Funnel API Error:", error);
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }
