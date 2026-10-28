@@ -31,20 +31,25 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Default to 30 days ago through today (IST format YYYY-MM-DD)
-  const [startDate, setStartDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().split("T")[0];
-  });
-  const [endDate, setEndDate] = useState<string>(() => {
-    return new Date().toISOString().split("T")[0];
-  });
+  // Initialize as empty strings so Next.js static prerender does not execute new Date()
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
   const [game, setGame] = useState<string>("all");
   const [device, setDevice] = useState<string>("all");
   const [source, setSource] = useState<string>("all");
 
+  // Populate dates only after mounting in the browser
+  useEffect(() => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - 30);
+    setStartDate(start.toISOString().split("T")[0]);
+    setEndDate(end.toISOString().split("T")[0]);
+  }, []);
+
   const fetchTelemetry = useCallback(async () => {
+    if (!startDate || !endDate) return;
+
     setLoading(true);
     setError(null);
     try {
@@ -56,7 +61,7 @@ export default function DashboardPage() {
         source,
       });
 
-      const res = await fetch(`/api/telemetry?${queryParams.toString()}`);
+      const res = await fetch(`/api?${queryParams.toString()}`);
       if (!res.ok) {
         throw new Error(`Server returned ${res.status}: ${res.statusText}`);
       }
@@ -92,15 +97,21 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            Telemetry Command Studio
+            Play-Ezygamers / Telemetry Command Studio
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            EzyGamers Live Product Telemetry & Funnel Performance
+            EzyGamers Live BigQuery Telemetry & Funnel Diagnostics
           </p>
         </div>
 
         {/* Preset Controls */}
         <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
+          <button
+            onClick={() => setPreset(1)}
+            className="px-2.5 py-1 rounded hover:bg-slate-800 text-slate-300"
+          >
+            24H
+          </button>
           <button
             onClick={() => setPreset(7)}
             className="px-2.5 py-1 rounded hover:bg-slate-800 text-slate-300"
@@ -112,12 +123,6 @@ export default function DashboardPage() {
             className="px-2.5 py-1 rounded bg-slate-800 text-white font-medium"
           >
             30D
-          </button>
-          <button
-            onClick={() => setPreset(90)}
-            className="px-2.5 py-1 rounded hover:bg-slate-800 text-slate-300"
-          >
-            90D
           </button>
           <button
             onClick={() => {
@@ -191,7 +196,7 @@ export default function DashboardPage() {
 
       {error && (
         <div className="bg-rose-950/40 border border-rose-800/80 rounded-xl p-3 text-rose-300 text-xs">
-          <strong>Error:</strong> {error}
+          <strong>Pipeline Error:</strong> {error}
         </div>
       )}
 
@@ -199,10 +204,10 @@ export default function DashboardPage() {
       <section className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
           { label: "DAU", value: metrics.dau, sub: "Daily Active Users" },
-          { label: "WAU", value: metrics.wau, sub: "7-Day Active Users" },
-          { label: "MAU", value: metrics.mau, sub: "30-Day Active Users" },
+          { label: "WAU", value: metrics.wau, sub: "Rolling 7-Day Users" },
+          { label: "MAU", value: metrics.mau, sub: "Rolling 30-Day Users" },
           { label: "Sessions", value: metrics.sessions, sub: "Unique GA Sessions" },
-          { label: "Game Starts", value: metrics.gameStarts, sub: "Total Play Events" },
+          { label: "Game Starts", value: metrics.gameStarts, sub: "Gameplay Activated" },
         ].map((card, idx) => (
           <div
             key={idx}
@@ -219,11 +224,11 @@ export default function DashboardPage() {
         ))}
       </section>
 
-      {/* Funnel & Tactical Section */}
+      {/* Tactical Diagnostic Section */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-slate-900/40 border border-slate-800/70 rounded-xl p-4 space-y-1.5">
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-            1. Funnel Diagnostic
+            1. Diagnostic Findings
           </span>
           <h4 className="text-xs font-semibold text-slate-200">Catalog Drop-Off</h4>
           <p className="text-xs text-slate-400 leading-relaxed">
@@ -235,7 +240,7 @@ export default function DashboardPage() {
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
             2. Immediate Tactical Plan
           </span>
-          <h4 className="text-xs font-semibold text-slate-200">High Impact Actions</h4>
+          <h4 className="text-xs font-semibold text-slate-200">High-Impact Actions</h4>
           <p className="text-xs text-slate-400 leading-relaxed">
             Deploy 1-click &quot;Play Now&quot; buttons on homepage game cards to bypass modal friction.
           </p>
