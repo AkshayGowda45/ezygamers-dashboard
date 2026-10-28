@@ -27,7 +27,7 @@ function getBigQueryClient() {
 
 const bigquery = getBigQueryClient();
 
-const EVENTS_TABLE = "`play-ezygamers-512305.analytics_557900460.events_*`";
+const EVENTS_TABLE = "`gen-lang-client-0375476077.analytics_telemetry.events_snapshot`";
 
 function cleanParam(val: string | null): string {
   if (!val || val === "all" || val === "All Games" || val === "All Devices" || val === "All Sources") {
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
     if (startDate && endDate) {
       const s = startDate.replace(/-/g, "");
       const e = endDate.replace(/-/g, "");
-      dateWhere = `AND _TABLE_SUFFIX BETWEEN '${s}' AND '${e}'`;
+      dateWhere = `AND event_date BETWEEN '${s}' AND '${e}'`;
     } else if (days !== "all") {
       const n = Math.max(1, Math.min(parseInt(days, 10) || 30, 365));
       dateWhere = `
